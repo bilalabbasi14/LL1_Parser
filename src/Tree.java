@@ -4,32 +4,36 @@ public class Tree {
 
     // NODE (inner class)
     public static class Node {
-        String       symbol;
-        List<Node>   children;
-        boolean      isLeaf;
+        String     symbol;
+        List<Node> children;
+
+        // NOTE: No redundant 'isLeaf' boolean field.
+        // Leaf status is determined solely by children.isEmpty() via isLeaf().
+        // Having a field AND a method that compute the same thing independently
+        // created a subtle inconsistency: the field was set at addChild() time
+        // (so it was only accurate for nodes added via addChild, and was never
+        // updated if further children were added later), while the method always
+        // returned the live, correct answer. The field is removed entirely.
 
         public Node(String symbol) {
             this.symbol   = symbol;
             this.children = new ArrayList<>();
-            this.isLeaf   = false;
         }
 
         public void addChild(Node child) {
             this.children.add(child);
-            // If this node has children it's internal,
-            // but the child itself might be a leaf
-            child.isLeaf = child.children.isEmpty();
         }
 
         public void addChildren(List<Node> kids) {
             for (Node kid : kids) addChild(kid);
         }
 
+        // Single source of truth: a node is a leaf if and only if it has no children.
         public boolean isLeaf() {
             return children.isEmpty();
         }
 
-        public String getSymbol() { return symbol; }
+        public String     getSymbol()   { return symbol; }
         public List<Node> getChildren() { return children; }
     }
 
@@ -69,8 +73,8 @@ public class Tree {
 
         System.out.println(prefix + connector + label);
 
-        String childPrefix = prefix + (isLast ? "    " : "│   ");
-        List<Node> children = node.getChildren();
+        String     childPrefix = prefix + (isLast ? "    " : "│   ");
+        List<Node> children    = node.getChildren();
         for (int i = 0; i < children.size(); i++) {
             printNode(children.get(i), childPrefix, i == children.size() - 1);
         }
@@ -78,7 +82,8 @@ public class Tree {
 
 
     // TRAVERSALS
-    /** Preorder traversal — returns list of symbols visited */
+
+    /** Preorder traversal — returns list of symbols visited. */
     public List<String> preorder() {
         List<String> result = new ArrayList<>();
         preorderHelper(root, result);
@@ -91,7 +96,7 @@ public class Tree {
         for (Node child : node.getChildren()) preorderHelper(child, result);
     }
 
-    /** Postorder traversal — returns list of symbols visited */
+    /** Postorder traversal — returns list of symbols visited. */
     public List<String> postorder() {
         List<String> result = new ArrayList<>();
         postorderHelper(root, result);
@@ -104,7 +109,7 @@ public class Tree {
         result.add(node.symbol);
     }
 
-    /** Returns only the leaf nodes left to right — should match original input */
+    /** Returns only the leaf nodes left-to-right — should match the original input tokens. */
     public List<String> getLeaves() {
         List<String> leaves = new ArrayList<>();
         getLeavesHelper(root, leaves);
@@ -123,7 +128,7 @@ public class Tree {
 
     // DOT FORMAT (optional Graphviz output)
     public String toDotFormat() {
-        StringBuilder sb  = new StringBuilder();
+        StringBuilder    sb  = new StringBuilder();
         sb.append("digraph ParseTree {\n");
         sb.append("  node [shape=ellipse, fontname=\"Helvetica\"];\n");
         Map<Node, Integer> ids = new IdentityHashMap<>();
@@ -139,13 +144,12 @@ public class Tree {
     }
 
     private void dotHelper(Node node, Map<Node, Integer> ids, StringBuilder sb) {
-        int id    = ids.get(node);
+        int    id    = ids.get(node);
         String label = node.symbol.equals(Grammar.EPSILON) ? "ε" : node.symbol;
 
         if (node.isLeaf())
             sb.append("  n").append(id)
-                    .append(" [label=\"").append(label)
-                    .append("\", shape=box];\n");
+                    .append(" [label=\"").append(label).append("\", shape=box];\n");
         else
             sb.append("  n").append(id)
                     .append(" [label=\"").append(label).append("\"];\n");
@@ -159,8 +163,8 @@ public class Tree {
 
 
     // VERIFY
-     // Verifies that the leaves of the parse tree match the original input tokens
 
+    /** Verifies that the leaves of the parse tree match the original input tokens. */
     public boolean verify(List<String> originalTokens) {
         List<String> leaves = getLeaves();
         return leaves.equals(originalTokens);

@@ -31,18 +31,33 @@ public class Grammar {
     public void loadFromFile(String filename) throws IOException {
         BufferedReader br = new BufferedReader(new FileReader(filename));
         String line;
+        int    lineNumber = 0;
 
         while ((line = br.readLine()) != null) {
+            lineNumber++;
             line = line.trim();
             if (line.isEmpty()) continue;
 
             // Split on "->"
             String[] parts = line.split("->", 2);
             if (parts.length != 2)
-                throw new IllegalArgumentException("Invalid production: " + line);
+                throw new IllegalArgumentException(
+                        "Line " + lineNumber + ": invalid production (missing '->'): " + line);
 
-            String lhs = parts[0].trim();           // e.g. "Expr"
-            String rhs = parts[1].trim();           // e.g. "Expr + Term | Term"
+            String lhs = parts[0].trim();
+            String rhs = parts[1].trim();
+
+            // --- VALIDATION: non-terminals must be multi-character and start with uppercase ---
+            // Single-character names like E, T, F are explicitly disallowed by the spec.
+            // A valid non-terminal: length >= 2, first char uppercase letter.
+            if (!isValidNonTerminalName(lhs)) {
+                br.close();
+                throw new IllegalArgumentException(
+                        "Line " + lineNumber + ": non-terminal '" + lhs + "' is invalid. "
+                                + "Non-terminals must start with an uppercase letter and be at least "
+                                + "2 characters long (e.g. Expr, Term, Factor). "
+                                + "Single-character names like E, T, F are not allowed.");
+            }
 
             // Register non-terminal
             if (!productions.containsKey(lhs)) {
@@ -57,6 +72,12 @@ public class Grammar {
                 for (String sym : alt.trim().split("\\s+")) {
                     if (!sym.isEmpty()) symbols.add(sym);
                 }
+                if (symbols.isEmpty()) {
+                    br.close();
+                    throw new IllegalArgumentException(
+                            "Line " + lineNumber + ": empty alternative in production for '"
+                                    + lhs + "'. Use 'epsilon' to denote an empty production.");
+                }
                 productions.get(lhs).add(symbols);
             }
         }
@@ -64,12 +85,54 @@ public class Grammar {
         br.close();
 
         if (nonTerminals.isEmpty())
-            throw new IllegalArgumentException("Grammar file is empty or invalid.");
+            throw new IllegalArgumentException("Grammar file is empty or contains no valid productions.");
 
         startSymbol = nonTerminals.get(0);
 
-        // Derive terminals: anything that appears in RHS but is NOT a non-terminal
+        // After all lines are read, validate that every non-terminal symbol referenced
+        // on the RHS that looks like a non-terminal (starts with uppercase) is also
+        // declared as an LHS. Catches typos early.
+        validateRhsNonTerminals();
+
+        // Derive terminals: anything on the RHS that is NOT a declared non-terminal
         deriveTerminals();
+    }
+
+    /**
+     * A valid non-terminal name must:
+     *   1. Be at least 2 characters long (single-char names like E, T, F are banned).
+     *   2. Start with an uppercase letter.
+     * This method is intentionally strict about rule 1 — the assignment spec
+     * explicitly forbids single-character non-terminals.
+     */
+    private boolean isValidNonTerminalName(String name) {
+        if (name == null || name.length() < 2) return false;
+        return Character.isUpperCase(name.charAt(0));
+    }
+
+    /**
+     * Warn about any RHS symbol that looks like a non-terminal (starts uppercase,
+     * length >= 2) but was never declared on a LHS. This catches typos such as
+     * writing "Epxr" instead of "Expr".
+     * We warn rather than throw so that grammars using capitalized terminals
+     * (e.g. keywords) are not broken.
+     */
+    private void validateRhsNonTerminals() {
+        for (Map.Entry<String, List<List<String>>> entry : productions.entrySet()) {
+            for (List<String> alt : entry.getValue()) {
+                for (String sym : alt) {
+                    if (sym.equals(EPSILON)) continue;
+                    if (sym.length() >= 2
+                            && Character.isUpperCase(sym.charAt(0))
+                            && !productions.containsKey(sym)) {
+                        System.out.println("[WARNING] Symbol '" + sym
+                                + "' in production for '" + entry.getKey()
+                                + "' looks like a non-terminal but was never declared "
+                                + "on a left-hand side. If it is a terminal, this is fine.");
+                    }
+                }
+            }
+        }
     }
 
     private void deriveTerminals() {
@@ -107,7 +170,7 @@ public class Grammar {
     private boolean leftFactorOne(String nt) {
         List<List<String>> alts = productions.get(nt);
 
-        // Find the longest common prefix shared by at least 2 alternatives
+        // Find the first symbol shared by at least 2 alternatives
         String prefix = findLongestCommonPrefix(alts);
         if (prefix == null) return false;
 
@@ -122,7 +185,7 @@ public class Grammar {
                 withoutPrefix.add(alt);
         }
 
-        // Create new non-terminal: NtPrime (keep adding ' until unique)
+        // Create new non-terminal: NtPrime (append more "Prime" until unique)
         String newNt = nt + "Prime";
         while (productions.containsKey(newNt)) newNt += "Prime";
 
@@ -152,7 +215,7 @@ public class Grammar {
         return true;
     }
 
-    /** Returns the first symbol of the longest common prefix group, or null if none. */
+    /** Returns the first symbol of the longest common prefix group, or null if none exists. */
     private String findLongestCommonPrefix(List<List<String>> alts) {
         Map<String, Integer> firstSymbolCount = new LinkedHashMap<>();
         for (List<String> alt : alts) {
@@ -168,19 +231,22 @@ public class Grammar {
 
 
     // LEFT RECURSION REMOVAL
+
     public void removeLeftRecursion() {
+        // Snapshot taken before the loop so newly added Prime non-terminals
+        // are not processed by the algorithm — they are already recursion-free.
         List<String> ntList = new ArrayList<>(nonTerminals);
 
         for (int i = 0; i < ntList.size(); i++) {
             String ai = ntList.get(i);
 
-            // Step 1: eliminate indirect left recursion using Aj (j < i)
+            // Step 1: eliminate indirect left recursion via Aj (j < i)
             for (int j = 0; j < i; j++) {
                 String aj = ntList.get(j);
                 substituteIndirect(ai, aj);
             }
 
-            // Step 2: eliminate direct left recursion for Ai
+            // Step 2: eliminate any direct left recursion that remains in Ai
             eliminateDirectLeftRecursion(ai);
         }
 
@@ -188,8 +254,9 @@ public class Grammar {
     }
 
     /**
-     * Replace every production Ai -> Aj γ
-     * with    Ai -> δ1 γ | δ2 γ | ... where Aj -> δ1 | δ2 | ...
+     * Replace every production  Ai -> Aj γ
+     * with                       Ai -> δ1 γ | δ2 γ | ...
+     * where Aj -> δ1 | δ2 | ...
      */
     private void substituteIndirect(String ai, String aj) {
         List<List<String>> aiAlts = productions.get(ai);
@@ -198,7 +265,7 @@ public class Grammar {
 
         for (List<String> alt : aiAlts) {
             if (!alt.isEmpty() && alt.get(0).equals(aj)) {
-                // Replace with all Aj alternatives prepended to the rest
+                // Replace Aj with each of its alternatives, appending the rest of alt
                 List<String> gamma = alt.subList(1, alt.size());
                 for (List<String> delta : ajAlts) {
                     List<String> newAlt = new ArrayList<>(delta);
@@ -214,24 +281,24 @@ public class Grammar {
     }
 
     /**
-     * For A -> Aα1 | Aα2 | β1 | β2
+     * For  A -> A α1 | A α2 | β1 | β2
      * Produce:
-     *   A       -> β1 APrime | β2 APrime
-     *   APrime  -> α1 APrime | α2 APrime | epsilon
+     *   A      -> β1 APrime | β2 APrime
+     *   APrime -> α1 APrime | α2 APrime | epsilon
      */
     private void eliminateDirectLeftRecursion(String nt) {
-        List<List<String>> alts = productions.get(nt);
-        List<List<String>> recursive    = new ArrayList<>(); // Aα
-        List<List<String>> nonRecursive = new ArrayList<>(); // β
+        List<List<String>> alts        = productions.get(nt);
+        List<List<String>> recursive    = new ArrayList<>(); // A α  (left-recursive)
+        List<List<String>> nonRecursive = new ArrayList<>(); // β    (non-recursive)
 
         for (List<String> alt : alts) {
             if (!alt.isEmpty() && alt.get(0).equals(nt))
-                recursive.add(alt.subList(1, alt.size())); // strip leading A
+                recursive.add(alt.subList(1, alt.size())); // strip the leading A
             else
                 nonRecursive.add(alt);
         }
 
-        if (recursive.isEmpty()) return; // no direct left recursion
+        if (recursive.isEmpty()) return; // nothing to do
 
         String primeName = nt + "Prime";
         while (productions.containsKey(primeName)) primeName += "Prime";
@@ -240,7 +307,8 @@ public class Grammar {
         List<List<String>> newAlts = new ArrayList<>();
         for (List<String> beta : nonRecursive) {
             List<String> newAlt = new ArrayList<>(beta);
-            if (newAlt.equals(List.of(EPSILON))) newAlt.clear(); // don't keep epsilon before prime
+            // If beta was just epsilon, don't keep it before the prime non-terminal
+            if (newAlt.equals(List.of(EPSILON))) newAlt.clear();
             newAlt.add(primeName);
             newAlts.add(newAlt);
         }
@@ -276,10 +344,10 @@ public class Grammar {
 
     // GETTERS
 
-    public String getStartSymbol()                              { return startSymbol; }
-    public List<String> getNonTerminals()                      { return nonTerminals; }
-    public Set<String> getTerminals()                          { return terminals; }
-    public Map<String, List<List<String>>> getProductions()    { return productions; }
+    public String                           getStartSymbol()   { return startSymbol; }
+    public List<String>                     getNonTerminals()  { return nonTerminals; }
+    public Set<String>                      getTerminals()     { return terminals; }
+    public Map<String, List<List<String>>>  getProductions()   { return productions; }
     public boolean isNonTerminal(String s)                     { return productions.containsKey(s); }
     public boolean isTerminal(String s)                        { return terminals.contains(s); }
 }
