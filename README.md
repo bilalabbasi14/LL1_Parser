@@ -1,12 +1,10 @@
 # LL(1) Parser
  
-**CS4031 — Compiler Construction | Assignment 02**
-Spring 2026 · FAST National University of Computer and Emerging Sciences
  
-| Team Member   | Student ID |
-|---------------|------------|
-| Ahmad Bilal   | 23I-0787   |
-| Muhammad Ali  | 23I-2565   |
+| Team Member   |
+|---------------|
+| Ahmad Bilal   |
+| Muhammad Ali  |
  
 ---
  
